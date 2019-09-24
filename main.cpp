@@ -15,6 +15,11 @@
 
 #include <SDL.h>
 #include <SDL2pp/SDL.hh>
+#include <SDL2pp/Renderer.hh>
+#include <SDL2pp/Texture.hh>
+#include <SDL2pp/Window.hh>
+
+namespace sdl = SDL2pp;
 
 
 struct Point4
@@ -165,8 +170,6 @@ struct Block
     std::shared_ptr<Texture> back;
 };
 
-
-namespace sdl = SDL2pp;
 
 /*
 
@@ -326,59 +329,95 @@ Color trace_ray(const Point4& camera, const Point4& delta, const World& world)
 }
 
 
-int main()
+class RayTracingRenderer
 {
-    const int img_width = 800;
-    const int img_height = 600;
-    const double screen_distance = 0.2;
-    const double screen_width = 0.4;
-    const double screen_height = 0.3;
-    png::image<png::rgb_pixel> img(800, 600);
+public:
+    RayTracingRenderer(
+        int img_width,
+        int img_height,
+        const World& world,
+        double screen_distance = 0.2,
+        double screen_width = 0.4,
+        double screen_height = 0.3
+    ):
+        buffer(img_height * img_width * 4, 0),
+        img_width(img_width),
+        img_height(img_height),
+        world(world),
+        screen_distance(screen_distance),
+        screen_width(screen_width),
+        screen_height(screen_height)
+    { }
 
-
-    auto grass_top = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/top.png"));
-    auto grass_bottom = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/bottom.png"));
-    auto grass_side = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/side.png"));
-    Block grass = {grass_top, grass_bottom, grass_side, grass_side, grass_side, grass_side};
-    
-    World world;
-    world.emplace(Coords{0, 0, 5}, grass);
-    world.emplace(Coords{-2, -1, 4}, grass);
-    world.emplace(Coords{1, -2, 3}, grass);
-    world.emplace(Coords{1, 2, 5}, grass);
-    //world.emplace(Coords{2, 1, 3}, Nothing{});
-    //world.emplace(Coords{2, 0, 3}, Nothing{});
-
-
-    for (int x = 0; x < img_width; ++x) {
-        for (int y = 0; y < img_height; ++y) {
-            double wx = double(x) / img_width * screen_width - screen_width / 2;
-            double wy = -(double(y) / img_height * screen_height - screen_height / 2);
-            double wz = screen_distance;
-            Point4 camera(0, 0, 0, 0);
-            Point4 point_on_screen(wx, wy, wz, 0);
-            auto delta = point_on_screen - camera;
-            auto color = trace_ray(camera, delta, world);
-            img[y][x] = png::rgb_pixel(color.r, color.g, color.b);
+    void render_frame(sdl::Texture& buf)
+    {
+        assert(buf.GetWidth() == img_width);
+        assert(buf.GetHeight() == img_height);
+        #pragma omp parallel for
+        for (int x = 0; x < img_width; ++x) {
+            for (int y = 0; y < img_height; ++y) {
+                double wx = double(x) / img_width * screen_width - screen_width / 2;
+                double wy = -(double(y) / img_height * screen_height - screen_height / 2);
+                double wz = screen_distance;
+                Point4 camera(0, 0, 0, 0);
+                Point4 point_on_screen(wx, wy, wz, 0);
+                auto delta = point_on_screen - camera;
+                auto color = trace_ray(camera, delta, world);
+                buffer[(y * img_width + x) * 4 + 3] = color.r;
+                buffer[(y * img_width + x) * 4 + 2] = color.g;
+                buffer[(y * img_width + x) * 4 + 1] = color.b;
+                buffer[(y * img_width + x) * 4 + 0] = 255;
+            }
         }
+        buf.Update(sdl::NullOpt, buffer.data(), img_width * 4);
     }
 
-    img.write("output.png");
-    /*
+private:
+    std::vector<uint8_t> buffer;
+    const int img_width;
+    const int img_height;
+    const World& world;
+    const double screen_distance;
+    const double screen_width;
+    const double screen_height;
+};
+
+
+
+int main()
+{
     try {
+        auto grass_top = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/top.png"));
+        auto grass_bottom = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/bottom.png"));
+        auto grass_side = std::make_shared<Texture>(png::image<png::rgb_pixel>("textures/grass/side.png"));
+        Block grass = {grass_top, grass_bottom, grass_side, grass_side, grass_side, grass_side};
+        
+        World world;
+        world.emplace(Coords{0, 0, 5}, grass);
+        world.emplace(Coords{-2, -1, 4}, grass);
+        world.emplace(Coords{1, -2, 3}, grass);
+        world.emplace(Coords{1, 2, 5}, grass);
+
         sdl::SDL sdl(SDL_INIT_VIDEO);
-        sdl::Window window("Blockrenderer window", SDL_WINDOWPOS_UNDEFINED, 800, 600);
+        sdl::Window window("Blockrenderer window", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 800, 600, 0);
         sdl::Renderer renderer(window, -1, SDL_RENDERER_ACCELERATED);
-        //sdl::Surface buf(0, 800, 600, 24, 0x0000'00ff, 0x0000'ff00, 0x00ff'0000, 0xff00'0000);`
-        while (true) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // TODO: what tf should I put here?
+        //sdl::Texture buf(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 800, 600);
+        sdl::Texture buf(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, 800, 600);
+        renderer.SetDrawColor(0, 0, 0, 255);
+
+        RayTracingRenderer rt(800, 600, world);
+
+        for (int i = 0; i < 10; ++i) {
+            //std::this_thread::sleep_for(std::chrono::milliseconds(100));
             std::cerr << "Frame... ";
             
-            renderer.SetDrawColor(0, 0, 0, 255);
             renderer.Clear();
-            //render_frame(renderer);
-            //renderer.Clear();
-            //renderer.Copy(buf);
+
+            rt.render_frame(buf);
+            renderer.Clear();
+            renderer.Copy(buf);
+            renderer.Present();
 
             std::cerr << "done" << std::endl;
         }
@@ -386,6 +425,5 @@ int main()
         std::cerr << "Fatal error: " << e.what() << std::endl;
         return 1;
     }
-    */
     //Point4 p1(
 }

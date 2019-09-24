@@ -1,0 +1,2 @@
+option('enable_ofast', type: 'boolean', value: false)
+option('enable_openmp', type: 'boolean', value: true)
